@@ -1,0 +1,10 @@
+{
+  "name": "global-modules",
+  "version": "0.0.1",
+  "description": "Exposes individual modules at the global level to prevent deep require paths",
+  "main": "src/index.js",
+  "author": "Mark Kahn <mark@voice.ngo>",
+  "dependencies": {
+    "yargs": "^8.0.2"
+  }
+}
