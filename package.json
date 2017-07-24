@@ -5,6 +5,9 @@
   "main": "src/index.js",
   "author": "Mark Kahn <mark@voice.ngo>",
   "dependencies": {
-    "yargs": "^8.0.2"
+    "builtin-modules": "^1.1.1",
+    "gen-await": "^0.0.1",
+    "minimist": "^1.2.0",
+    "node-notifier": "^5.1.2"
   }
 }

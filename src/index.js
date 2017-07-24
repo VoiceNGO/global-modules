@@ -1,5 +1,6 @@
 // @flow
 
-const processor = require('./processor');
-const fileNames = require('./arg-filenames');
+import processor from './processor';
+import fileNames from './arg-filenames';
+
 fileNames.forEach(processor);

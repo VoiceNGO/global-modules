@@ -1,118 +1,154 @@
 // @flow
-// @providesModule foo
 
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
-import { genAllNullable } from 'gen-await';
+import { genNullable, genEnforce, genAllEnforce, genAllNullable } from 'gen-await';
+import builtinModules from 'builtin-modules';
+import notifier from 'node-notifier';
 
-const [access, lstat, mkdir, readFile, symlink, unlink] = [
+import FileHandler from './file-handler';
+import { exists, linkFile, readSymlinkTarget } from './fs-utils';
+import ModuleError from './module-error';
+
+const shouldNotify: boolean = require('minimist')(process.argv.slice(2)).nofity;
+
+const [access, lstat, mkdir, readdir, readFile, readlink, symlink, unlink] = [
   fs.access,
   fs.lstat,
   fs.mkdir,
+  fs.readdir,
   fs.readFile,
+  fs.readlink,
   fs.symlink,
   fs.unlink,
 ].map(promisify);
-const fileModuleMap: { [string]: string } = {};
 
 import type { Stats } from 'fs';
 
-const PROVIDES_MODULE_RX = /^\s*(?:\*||\/\/)\s*\@providesModule\s*(\S+)$/m;
+export default async function(filePath: string) {
+  const handler = new FileHandler(filePath);
 
-export default async function(fileName: string) {
-  const fileStat: Stats = await lstat(fileName);
-
-  if (fileStat.isSymbolicLink()) {
+  if (!await handler.exists()) {
+    cleanModule(handler);
     return;
   }
 
-  if (!fileStat.isFile()) {
-    throw new Error(`attempting to process ${fileName}, but it is not a file`);
+  if (!await handler.canProcess()) {
+    return;
   }
 
-  const moduleName = await getModuleName(fileName);
+  const moduleName = await handler.getModuleName();
 
   if (moduleName) {
-    addModule(fileName, moduleName);
-  } else {
-    removeModule(fileName);
+    if (!await handler.getOrCreateNearestNodeModulesDir()) {
+      throw new ModuleError(`Unable to find an appropriate node_modules directory for ${filePath}.`);
+    }
+
+    addModule(handler);
   }
-};
-
-async function getModuleName(fileName: string): Promise<?string> {
-  const fileContents = await readFile(fileName);
-  const matches = PROVIDES_MODULE_RX.exec(fileContents);
-
-  if (!matches) {
-    return;
-  }
-
-  return matches[1];
+  cleanModule(handler);
 }
 
-async function addModule(fileName: string, moduleName: string) {
-  const nodeModulesDir = await getNearestProjectRootDir(fileName);
+async function addModule(handler: FileHandler) {
+  const [nodeModulesDir, moduleName: string] = await genAllEnforce(
+    handler.getNearestNodeModulesDir(),
+    handler.getModuleName(),
+  );
 
-  if (!nodeModulesDir) {
-    throw new Error(`Unable to find an appropriate node_modules directory for ${fileName}`);
+  if (~builtinModules.indexOf(moduleName)) {
+    throw new ModuleError(
+      `${moduleName} is the name of a builtin node module.  Refusing to create a symlink of the same name.`,
+    );
   }
 
-  linkModule(fileName, moduleName, nodeModulesDir);
-}
-
-function removeModule(fileName: string) {
-  const module = fileModuleMap[fileName];
-
-  if (module) {
-    unlink(module);
-  }
-}
-
-async function linkModule(fileName: string, moduleName: string, moduleDir: string) {
-  const filePathNormalized = path.normalize(fileName).split(path.sep);
-  const moduleDirNormalized = path.normalize(moduleDir).split(path.sep);
+  const filePathSplitNormalized = path.normalize(handler.filePath).split(path.sep);
+  const moduleDirSplitNormalized = path.normalize(nodeModulesDir).split(path.sep);
   let firstNonSharedIndex = 0;
 
-  while(filePathNormalized[firstNonSharedIndex] === moduleDirNormalized[firstNonSharedIndex]){
+  while (filePathSplitNormalized[firstNonSharedIndex] === moduleDirSplitNormalized[firstNonSharedIndex]) {
     firstNonSharedIndex++;
   }
 
-  const linkTarget = path.join('..', ...filePathNormalized.slice(firstNonSharedIndex));
+  const linkSource = path.join('..', ...filePathSplitNormalized.slice(firstNonSharedIndex));
+  const linkTarget = path.join(nodeModulesDir, `${moduleName}.js`);
+  const folderTarget = path.join(nodeModulesDir, moduleName);
 
-  try {
-    symlink(linkTarget, path.join(moduleDir, 'node_modules', moduleName));
-  } catch (err) {
-    throw new Error(`could not create symlink because ${err}`);
+  let [existingTarget: string, directoryExists: boolean] = await genAllNullable(
+    readSymlinkTarget(linkTarget),
+    exists(folderTarget),
+  );
+
+  if (directoryExists) {
+    throw new ModuleError(
+      `A file or directory at ${folderTarget} already exists which would cause a naming conflict with ` +
+        `${linkTarget}.  Refusing to create the link.`,
+    );
+  }
+
+  if (existingTarget && !await exists(existingTarget)) {
+    unlink(linkTarget);
+    existingTarget = null;
+  }
+
+  if (existingTarget) {
+    if (existingTarget !== linkSource) {
+      throw new ModuleError(
+        `link to ${linkTarget} already exists pointing to ${existingTarget}.  ` +
+          `Cowardly refusing to replacing it with ${linkSource}.`,
+      );
+    }
+  } else {
+    linkFile(linkSource, linkTarget);
   }
 }
 
-async function getNearestProjectRootDir(fileName): Promise<?string> {
-  const splitPath = fileName.split(path.sep);
-  for (var i = splitPath.length - 1; i >= 0; i--) {
-    const dir = splitPath.slice(0, i);
-    const [nodeModulesExists, packageJsonExists] = await genAllNullable([
-      access(path.join(...dir.concat('node_modules')), fs.constants.R_OK),
-      access(path.join(...dir.concat('package.json')), fs.constants.R_OK),
-    ]);
+async function cleanModule(handler: FileHandler) {
+  const moduleDir = await handler.getNearestNodeModulesDir();
 
-    if (nodeModulesExists !== null || packageJsonExists !== null) {
-      if (nodeModulesExists === null) {
-        try {
-          mkdir(...dir.concat('node_modules'));
-        } catch (err) {
-          throw new Error(`could not create node_modules directory in ${path.join(...dir)} because ${err}`);
-        }
-      }
-      return path.join(...dir);
-    }
+  if (!moduleDir) {
+    return;
   }
+  const [files: Array<string>, moduleName] = await Promise.all([
+    genEnforce(readdir(moduleDir)),
+    genNullable(handler.getModuleName()),
+  ]);
+  const normalizedFileToRemove = path.normalize(handler.filePath);
+
+  files.forEach(async fileName => {
+    const filePath = path.join(moduleDir, fileName);
+
+    const target = await readSymlinkTarget(filePath);
+    if (!target) {
+      return;
+    }
+
+    if (path.normalize(path.join(moduleDir, target)) === normalizedFileToRemove) {
+      // old symlink, probably re-named the module
+      if (!moduleName || fileName !== `${moduleName}.js`) {
+        unlink(filePath);
+      }
+    }
+  });
+}
+
+function catchError(type, err) {
+  const errPrefix = err instanceof ModuleError ? '' : `uncaught ${type}: `;
+
+  if (shouldNotify) {
+    notifier.notify({
+      title: 'Global Modules Error',
+      message: err.message,
+    });
+  }
+  console.error(`${errPrefix}${err}`);
+  console.log(err);
 }
 
 process.on('uncaughtException', function(err) {
-  console.error('uncaught exception:', err);
+  catchError('exception', err);
 });
 
 process.on('unhandledRejection', function(reason, p) {
-  console.error('uncaught promise rejection:', reason);
+  catchError('promise rejection', reason);
 });

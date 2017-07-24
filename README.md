@@ -1,4 +1,4 @@
-## Global Modules
+## ProvidesModule
 
 The idea of this was blatently taken from Facebook's `@providesModule` syntax, so thank's guys!
 
@@ -26,8 +26,8 @@ Requires [watchman](https://facebook.github.io/watchman/), so install that first
 
 ```sh
 > watchman watch ./src
-> watchman -- trigger ./src global-modules '**/*.js' -- \
-  node ./node_modules/babel-cli/bin/babel-node.js ./modules/global-modules
+> watchman -- trigger ./src providesModule '**/*.js' -- \
+  node ./node_modules/babel-cli/bin/babel-node.js ./modules/providesModule
 ```
 
 The babel nonsense is because I'm still working on this and running it through babel-cli.  I'll clean it up soon, sorry!

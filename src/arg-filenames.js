@@ -1,3 +1,3 @@
 // @flow
 
-module.exports = [...process.argv].slice(2);
+export default require('minimist')(process.argv.slice(2))._;
