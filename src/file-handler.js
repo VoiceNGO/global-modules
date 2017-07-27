@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 
-import { genAllNullable } from 'gen-await';
+import { genAllNullable, genNullable } from 'gen-await';
 import ModuleError from './module-error';
 import { exists } from './fs-utils';
 
@@ -86,13 +86,9 @@ export default class FileHandler {
   }
 
   async getModuleName(): Promise<?string> {
-    const fileContents = await readFile(this.filePath);
+    const fileContents = await genNullable(readFile(this.filePath));
     const matches = PROVIDES_MODULE_RX.exec(fileContents);
 
-    if (!matches) {
-      return;
-    }
-
-    return matches[1];
+    return matches ? matches[1] : null;
   }
 }

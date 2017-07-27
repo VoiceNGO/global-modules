@@ -23,7 +23,6 @@ export async function readSymlinkTarget(filePath: string): Promise<?string> {
 
 export async function linkFile(source: string, target: string) {
   try {
-    console.log(symlink);
     symlink(source, target);
   } catch (err) {
     throw new ModuleError(`Could not create symlink because ${err}.`);

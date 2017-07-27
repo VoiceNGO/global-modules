@@ -30,7 +30,7 @@ export default async function(filePath: string) {
   const handler = new FileHandler(filePath);
 
   if (!await handler.exists()) {
-    cleanModule(handler);
+    await cleanModule(handler);
     return;
   }
 
@@ -39,15 +39,14 @@ export default async function(filePath: string) {
   }
 
   const moduleName = await handler.getModuleName();
-
   if (moduleName) {
     if (!await handler.getOrCreateNearestNodeModulesDir()) {
       throw new ModuleError(`Unable to find an appropriate node_modules directory for ${filePath}.`);
     }
 
-    addModule(handler);
+    await addModule(handler);
   }
-  cleanModule(handler);
+  await cleanModule(handler);
 }
 
 async function addModule(handler: FileHandler) {
@@ -86,8 +85,8 @@ async function addModule(handler: FileHandler) {
     );
   }
 
-  if (existingTarget && !await exists(existingTarget)) {
-    unlink(linkTarget);
+  if (existingTarget && !await exists(path.resolve(nodeModulesDir, existingTarget))) {
+    await unlink(linkTarget);
     existingTarget = null;
   }
 
@@ -99,8 +98,12 @@ async function addModule(handler: FileHandler) {
       );
     }
   } else {
-    linkFile(linkSource, linkTarget);
+    await linkFile(linkSource, linkTarget);
   }
+}
+
+function timeout(timer: number) {
+  return new Promise(resolve => setTimeout(resolve, timer));
 }
 
 async function cleanModule(handler: FileHandler) {
@@ -115,21 +118,23 @@ async function cleanModule(handler: FileHandler) {
   ]);
   const normalizedFileToRemove = path.normalize(handler.filePath);
 
-  files.forEach(async fileName => {
-    const filePath = path.join(moduleDir, fileName);
+  await Promise.all(
+    files.map(async fileName => {
+      const filePath = path.join(moduleDir, fileName);
+      const target = await readSymlinkTarget(filePath);
 
-    const target = await readSymlinkTarget(filePath);
-    if (!target) {
-      return;
-    }
-
-    if (path.normalize(path.join(moduleDir, target)) === normalizedFileToRemove) {
-      // old symlink, probably re-named the module
-      if (!moduleName || fileName !== `${moduleName}.js`) {
-        unlink(filePath);
+      if (!target) {
+        return;
       }
-    }
-  });
+
+      if (path.normalize(path.join(moduleDir, target)) === normalizedFileToRemove) {
+        // old symlink, probably re-named the module
+        if (!moduleName || fileName !== `${moduleName}.js`) {
+          await unlink(filePath);
+        }
+      }
+    }),
+  );
 }
 
 function catchError(type, err) {
