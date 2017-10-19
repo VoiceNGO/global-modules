@@ -4,9 +4,10 @@ import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 
-import { genAllNullable, genNullable } from 'gen-await';
+const { genAllNullable, genNullable } = require('node-utils').genAwait;
 import ModuleError from './module-error';
 import { exists } from './fs-utils';
+import ModuleMap from './module-map';
 
 const [lstat, mkdir, readFile] = [fs.lstat, fs.mkdir, fs.readFile].map(promisify);
 
@@ -18,6 +19,7 @@ export default class FileHandler {
   filePath: string;
   stats: ?Stats;
   nodeModulesPath: ?string;
+  moduleMap: ?ModuleMap;
 
   constructor(filePath: string) {
     this.filePath = filePath;
@@ -87,8 +89,21 @@ export default class FileHandler {
 
   async getModuleName(): Promise<?string> {
     const fileContents = await genNullable(readFile(this.filePath));
-    const matches = PROVIDES_MODULE_RX.exec(fileContents);
+    const matches = PROVIDES_MODULE_RX.exec(fileContents || '');
 
     return matches ? matches[1] : null;
+  }
+
+  async getModuleMap(): Promise<ModuleMap> {
+    if (!this.moduleMap) {
+      const nodeModulesDir = await this.getNearestNodeModulesDir();
+      if (!nodeModulesDir) {
+        throw new ModuleError(`Could not get module map for ${this.filePath}`);
+      }
+
+      this.moduleMap = new ModuleMap(nodeModulesDir);
+    }
+
+    return this.moduleMap;
   }
 }

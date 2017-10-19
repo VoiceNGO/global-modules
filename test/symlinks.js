@@ -1,5 +1,3 @@
-// @flow
-
 declare function after(callback: Function): void;
 declare function afterEach(callback: Function): void;
 declare function before(callback: Function): void;
@@ -83,7 +81,6 @@ describe('Symlinks', () => {
 
   it('will not link modules that conflict with core node modules', async () => {
     await createFile('foo.js', 'fs');
-    await createFile('bar.js', 'fs');
 
     (await symlinkExists('fs')).should.be.false();
   });

@@ -1,12 +1,8 @@
 // @flow
 
-import fs from 'fs';
-import { promisify } from 'util';
-
-import { genNullable } from 'gen-await';
+const { genNullable } = require('node-utils').genAwait;
+const { access, lstat, readlink, symlink } = require('node-utils').fsAsync;
 import ModuleError from './module-error';
-
-const [access, lstat, readlink, symlink] = [fs.access, fs.lstat, fs.readlink, fs.symlink].map(promisify);
 
 export async function readSymlinkTarget(filePath: string): Promise<?string> {
   if (!await exists(filePath)) {

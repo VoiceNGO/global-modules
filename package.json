@@ -6,9 +6,11 @@
   "author": "Mark Kahn <mark@voice.ngo>",
   "dependencies": {
     "builtin-modules": "^1.1.1",
+    "fb-watchman": "^2.0.0",
     "gen-await": "^0.0.1",
     "minimist": "^1.2.0",
-    "node-notifier": "^5.1.2"
+    "node-notifier": "^5.1.2",
+    "node-utils": "*"
   },
   "devDependencies": {
     "babel-cli": "^6.24.1",
@@ -23,9 +25,6 @@
     "test": "mocha --require babel-register"
   },
   "babel": {
-    "presets": [
-      "flow",
-      "import-export"
-    ]
+    "presets": ["flow", "import-export"]
   }
 }
