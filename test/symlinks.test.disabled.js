@@ -1,26 +1,31 @@
+// @flow
+
 declare function after(callback: Function): void;
 declare function afterEach(callback: Function): void;
 declare function before(callback: Function): void;
 declare function beforeEach(callback: Function): void;
 declare function describe(name: string, callback: Function): void;
-declare function it(name: string, callback: Function): void;
+declare function test(name: string, callback: Function): void;
 
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
-import should from 'should';
-import processor from '../src/processor';
-import { genAllNullable } from 'gen-await';
-
+import { processFile } from '../src/processor';
+import { genAwait } from 'node-utils';
 import { readSymlinkTarget, exists } from '../src/fs-utils';
+import expect from 'expect';
+
+import type { tAbsolutePath } from 'flow-types';
+
+const { genAllNull } = genAwait;
 const [writeFile, unlink] = [fs.writeFile, fs.unlink].map(promisify);
 
-function srcPath(fileName: string): string {
-  return `./${fileName}`;
+function srcPath(fileName: string): tAbsolutePath {
+  return path.resolve(`./${fileName}`);
 }
 
-function nodeModulesPath(fileName: string): string {
-  return path.join('node_modules', `${fileName}.js`);
+function nodeModulesPath(fileName: string): tAbsolutePath {
+  return path.resolve('node_modules', `${fileName}.js`);
 }
 
 async function createFile(fileName: string, moduleName: string) {
@@ -33,8 +38,8 @@ async function isSymlinkedTo(linkName: string, expectedTarget: string): Promise<
   return target === path.join('..', expectedTarget);
 }
 
-async function symlinkExists(linkName: string): Promise<boolean> {
-  return await exists(nodeModulesPath(linkName));
+function symlinkExists(linkName: string): Promise<boolean> {
+  return exists(nodeModulesPath(linkName));
 }
 
 async function deleteFile(fileName: string) {
@@ -42,68 +47,64 @@ async function deleteFile(fileName: string) {
   await processFile(srcPath(fileName));
 }
 
-async function processFile(fileName: string) {
-  try {
-    await processor(fileName);
-  } catch (err) {}
-}
-
 describe('Symlinks', () => {
   afterEach(async () => {
     try {
-      await genAllNullable(
+      await genAllNull(
         unlink(srcPath('foo.js')),
         unlink(srcPath('bar.js')),
         unlink(nodeModulesPath('foo')),
         unlink(nodeModulesPath('bar')),
       );
-    } catch (err) {}
+    } catch (err) {
+      // intentionally empty
+    }
   });
 
-  it('symlinks modules', async () => {
+  test('symlinks modules', async () => {
     await createFile('foo.js', 'foo');
 
-    (await isSymlinkedTo('foo', 'foo.js')).should.be.true();
+    expect(await isSymlinkedTo('foo', 'foo.js')).toBe(true);
   });
 
-  it('will not overwrite one module with another', async () => {
+  test('will not overwrite one module with another', async () => {
     await createFile('foo.js', 'foo');
     await createFile('bar.js', 'foo');
 
-    (await isSymlinkedTo('foo', 'foo.js')).should.be.true();
+    expect(await isSymlinkedTo('foo', 'foo.js')).toBe(true);
   });
 
-  it('will not link modules that already exist', async () => {
+  test('will not link modules that already exist', async () => {
     await createFile('foo.js', 'mocha');
 
-    (await symlinkExists('mocha')).should.be.false();
+    expect(await symlinkExists('mocha')).toBe(false);
   });
 
-  it('will not link modules that conflict with core node modules', async () => {
+  test('will not link modules that conflict with core node modules', async () => {
     await createFile('foo.js', 'fs');
 
-    (await symlinkExists('fs')).should.be.false();
+    expect(await symlinkExists('fs')).toBe(false);
   });
 
-  it('will delete a symlink when module reference is removed', async () => {
+  test('will delete a symlink when module reference is removed', async () => {
     await createFile('foo.js', 'foo');
     await createFile('foo.js', '');
 
-    (await symlinkExists('foo')).should.be.false();
+    expect(await symlinkExists('foo')).toBe(false);
   });
 
-  it('will delete a symlink when file is deleted', async () => {
+  test('will delete a symlink when file is deleted', async () => {
     await createFile('foo.js', 'foo');
     await deleteFile('foo.js');
 
-    (await symlinkExists('foo')).should.be.false();
+    expect(await symlinkExists('foo')).toBe(false);
   });
 
-  it('will delete and re-create a symlink when module reference is changed', async () => {
+  test('will delete and re-create a symlink when module reference is changed', async () => {
     await createFile('foo.js', 'foo');
     await createFile('foo.js', 'bar');
 
-    (await isSymlinkedTo('bar', 'foo.js')).should.be.true();
-    (await symlinkExists('foo')).should.be.false();
+    expect(await isSymlinkedTo('bar', 'foo.js')).toBe(true);
+    expect(await symlinkExists('foo')).toBe(false);
   });
 });

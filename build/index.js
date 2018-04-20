@@ -1,13 +1,13 @@
 'use strict';
 
-var _processor = require('./processor');
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
 
-var _processor2 = _interopRequireDefault(_processor);
+var _watch = require('./watch');
 
-var _argFilenames = require('./arg-filenames');
-
-var _argFilenames2 = _interopRequireDefault(_argFilenames);
+var _watch2 = _interopRequireDefault(_watch);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-_argFilenames2.default.forEach(_processor2.default);
+exports.default = _watch2.default;

@@ -6,16 +6,20 @@ Object.defineProperty(exports, "__esModule", {
 exports.readSymlinkTarget = readSymlinkTarget;
 exports.linkFile = linkFile;
 exports.exists = exists;
+exports.getBuildPath = getBuildPath;
 
-var _moduleError = require('./module-error');
+require('source-map-support/register');
 
-var _moduleError2 = _interopRequireDefault(_moduleError);
+const path = require('path');
 
-function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+const { genNull } = require('node-utils').genAwait;
+const { lstat, readlink, symlink } = require('node-utils').fsAsync;
+const { replaceLastOccurrence } = require('node-utils').string;
 
-const { genNullable } = require('node-utils').genAwait;
-const { access, lstat, readlink, symlink } = require('node-utils').fsAsync;
-async function readSymlinkTarget(filePath /*: string*/) /*: Promise<?string>*/ {
+const SRC_DIRECTORY = 'src';
+const BUILD_DIRECTORY = 'build';
+
+async function readSymlinkTarget(filePath) {
   if (!(await exists(filePath))) {
     return null;
   }
@@ -28,15 +32,20 @@ async function readSymlinkTarget(filePath /*: string*/) /*: Promise<?string>*/ {
   return readlink(filePath);
 }
 
-async function linkFile(source /*: string*/, target /*: string*/) {
+async function linkFile(realPath, linkPath) {
   try {
-    symlink(source, target);
+    await symlink(realPath, linkPath);
   } catch (err) {
-    throw new _moduleError2.default(`Could not create symlink because ${err}.`);
+    throw new Error(`Could not create symlink because ${err}.`);
   }
 }
 
-async function exists(path /*: string*/) /*: Promise<boolean>*/ {
-  const hasStats = await genNullable(lstat(path));
+async function exists(filePath) {
+  const hasStats = await genNull(lstat(filePath));
   return hasStats !== null;
 }
+
+function getBuildPath(filePath) {
+  return replaceLastOccurrence(filePath, `${path.sep}${SRC_DIRECTORY}${path.sep}`, `${path.sep}${BUILD_DIRECTORY}${path.sep}`);
+}
+//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIi4uL3NyYy9mcy11dGlscy5qcyJdLCJuYW1lcyI6WyJyZWFkU3ltbGlua1RhcmdldCIsImxpbmtGaWxlIiwiZXhpc3RzIiwiZ2V0QnVpbGRQYXRoIiwicGF0aCIsInJlcXVpcmUiLCJnZW5OdWxsIiwiZ2VuQXdhaXQiLCJsc3RhdCIsInJlYWRsaW5rIiwic3ltbGluayIsImZzQXN5bmMiLCJyZXBsYWNlTGFzdE9jY3VycmVuY2UiLCJzdHJpbmciLCJTUkNfRElSRUNUT1JZIiwiQlVJTERfRElSRUNUT1JZIiwiZmlsZVBhdGgiLCJzdGF0IiwiaXNTeW1ib2xpY0xpbmsiLCJyZWFsUGF0aCIsImxpbmtQYXRoIiwiZXJyIiwiRXJyb3IiLCJoYXNTdGF0cyIsInNlcCJdLCJtYXBwaW5ncyI6Ijs7Ozs7UUFhc0JBLGlCLEdBQUFBLGlCO1FBYUFDLFEsR0FBQUEsUTtRQVFBQyxNLEdBQUFBLE07UUFLTkMsWSxHQUFBQSxZOzs7O0FBckNoQixNQUFNQyxPQUFPQyxRQUFRLE1BQVIsQ0FBYjs7QUFFQSxNQUFNLEVBQUVDLE9BQUYsS0FBY0QsUUFBUSxZQUFSLEVBQXNCRSxRQUExQztBQUNBLE1BQU0sRUFBRUMsS0FBRixFQUFTQyxRQUFULEVBQW1CQyxPQUFuQixLQUErQkwsUUFBUSxZQUFSLEVBQXNCTSxPQUEzRDtBQUNBLE1BQU0sRUFBRUMscUJBQUYsS0FBNEJQLFFBQVEsWUFBUixFQUFzQlEsTUFBeEQ7O0FBSUEsTUFBTUMsZ0JBQWdCLEtBQXRCO0FBQ0EsTUFBTUMsa0JBQWtCLE9BQXhCOztBQUVPLGVBQWVmLGlCQUFmLENBQWlDZ0IsUUFBakMsRUFBeUY7QUFDOUYsTUFBSSxFQUFDLE1BQU1kLE9BQU9jLFFBQVAsQ0FBUCxDQUFKLEVBQTZCO0FBQzNCLFdBQU8sSUFBUDtBQUNEOztBQUVELFFBQU1DLE9BQU8sTUFBTVQsTUFBTVEsUUFBTixDQUFuQjtBQUNBLE1BQUksQ0FBQ0MsS0FBS0MsY0FBTCxFQUFMLEVBQTRCO0FBQzFCLFdBQU8sSUFBUDtBQUNEOztBQUVELFNBQU9ULFNBQVNPLFFBQVQsQ0FBUDtBQUNEOztBQUVNLGVBQWVmLFFBQWYsQ0FBd0JrQixRQUF4QixFQUFpREMsUUFBakQsRUFBMEU7QUFDL0UsTUFBSTtBQUNGLFVBQU1WLFFBQVFTLFFBQVIsRUFBa0JDLFFBQWxCLENBQU47QUFDRCxHQUZELENBRUUsT0FBT0MsR0FBUCxFQUFZO0FBQ1osVUFBTSxJQUFJQyxLQUFKLENBQVcsb0NBQW1DRCxHQUFJLEdBQWxELENBQU47QUFDRDtBQUNGOztBQUVNLGVBQWVuQixNQUFmLENBQXNCYyxRQUF0QixFQUFpRTtBQUN0RSxRQUFNTyxXQUFXLE1BQU1qQixRQUFRRSxNQUFNUSxRQUFOLENBQVIsQ0FBdkI7QUFDQSxTQUFPTyxhQUFhLElBQXBCO0FBQ0Q7O0FBRU0sU0FBU3BCLFlBQVQsQ0FBaUNhLFFBQWpDLEVBQWlEO0FBQ3RELFNBQU9KLHNCQUNMSSxRQURLLEVBRUosR0FBRVosS0FBS29CLEdBQUksR0FBRVYsYUFBYyxHQUFFVixLQUFLb0IsR0FBSSxFQUZsQyxFQUdKLEdBQUVwQixLQUFLb0IsR0FBSSxHQUFFVCxlQUFnQixHQUFFWCxLQUFLb0IsR0FBSSxFQUhwQyxDQUFQO0FBS0QiLCJmaWxlIjoiZnMtdXRpbHMuanMiLCJzb3VyY2VzQ29udGVudCI6WyIvLyBAZmxvd1xuXG5jb25zdCBwYXRoID0gcmVxdWlyZSgncGF0aCcpO1xuXG5jb25zdCB7IGdlbk51bGwgfSA9IHJlcXVpcmUoJ25vZGUtdXRpbHMnKS5nZW5Bd2FpdDtcbmNvbnN0IHsgbHN0YXQsIHJlYWRsaW5rLCBzeW1saW5rIH0gPSByZXF1aXJlKCdub2RlLXV0aWxzJykuZnNBc3luYztcbmNvbnN0IHsgcmVwbGFjZUxhc3RPY2N1cnJlbmNlIH0gPSByZXF1aXJlKCdub2RlLXV0aWxzJykuc3RyaW5nO1xuXG5pbXBvcnQgdHlwZSB7IHRBYnNvbHV0ZVBhdGggfSBmcm9tICdmbG93LXR5cGVzJztcblxuY29uc3QgU1JDX0RJUkVDVE9SWSA9ICdzcmMnO1xuY29uc3QgQlVJTERfRElSRUNUT1JZID0gJ2J1aWxkJztcblxuZXhwb3J0IGFzeW5jIGZ1bmN0aW9uIHJlYWRTeW1saW5rVGFyZ2V0KGZpbGVQYXRoOiB0QWJzb2x1dGVQYXRoKTogUHJvbWlzZTx0QWJzb2x1dGVQYXRoIHwgbnVsbD4ge1xuICBpZiAoIWF3YWl0IGV4aXN0cyhmaWxlUGF0aCkpIHtcbiAgICByZXR1cm4gbnVsbDtcbiAgfVxuXG4gIGNvbnN0IHN0YXQgPSBhd2FpdCBsc3RhdChmaWxlUGF0aCk7XG4gIGlmICghc3RhdC5pc1N5bWJvbGljTGluaygpKSB7XG4gICAgcmV0dXJuIG51bGw7XG4gIH1cblxuICByZXR1cm4gcmVhZGxpbmsoZmlsZVBhdGgpO1xufVxuXG5leHBvcnQgYXN5bmMgZnVuY3Rpb24gbGlua0ZpbGUocmVhbFBhdGg6IHRBYnNvbHV0ZVBhdGgsIGxpbmtQYXRoOiB0QWJzb2x1dGVQYXRoKSB7XG4gIHRyeSB7XG4gICAgYXdhaXQgc3ltbGluayhyZWFsUGF0aCwgbGlua1BhdGgpO1xuICB9IGNhdGNoIChlcnIpIHtcbiAgICB0aHJvdyBuZXcgRXJyb3IoYENvdWxkIG5vdCBjcmVhdGUgc3ltbGluayBiZWNhdXNlICR7ZXJyfS5gKTtcbiAgfVxufVxuXG5leHBvcnQgYXN5bmMgZnVuY3Rpb24gZXhpc3RzKGZpbGVQYXRoOiB0QWJzb2x1dGVQYXRoKTogUHJvbWlzZTxib29sZWFuPiB7XG4gIGNvbnN0IGhhc1N0YXRzID0gYXdhaXQgZ2VuTnVsbChsc3RhdChmaWxlUGF0aCkpO1xuICByZXR1cm4gaGFzU3RhdHMgIT09IG51bGw7XG59XG5cbmV4cG9ydCBmdW5jdGlvbiBnZXRCdWlsZFBhdGg8VDogc3RyaW5nPihmaWxlUGF0aDogVCk6IFQge1xuICByZXR1cm4gcmVwbGFjZUxhc3RPY2N1cnJlbmNlKFxuICAgIGZpbGVQYXRoLFxuICAgIGAke3BhdGguc2VwfSR7U1JDX0RJUkVDVE9SWX0ke3BhdGguc2VwfWAsXG4gICAgYCR7cGF0aC5zZXB9JHtCVUlMRF9ESVJFQ1RPUll9JHtwYXRoLnNlcH1gLFxuICApO1xufVxuIl19

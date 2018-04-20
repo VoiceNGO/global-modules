@@ -3,121 +3,130 @@
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
+exports.default = undefined;
 
 var _fs = require('fs');
-
-var _fs2 = _interopRequireDefault(_fs);
 
 var _path = require('path');
 
 var _path2 = _interopRequireDefault(_path);
 
-var _util = require('util');
-
-var _moduleError = require('./module-error');
-
-var _moduleError2 = _interopRequireDefault(_moduleError);
-
-var _fsUtils = require('./fs-utils');
+var _nodeUtils = require('node-utils');
 
 var _moduleMap = require('./module-map');
 
 var _moduleMap2 = _interopRequireDefault(_moduleMap);
 
+var _fsUtils = require('./fs-utils');
+
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-const { genAllNullable, genNullable } = require('node-utils').genAwait;
+const { genNull, genAllNull } = _nodeUtils.genAwait;
 
-const [lstat, mkdir, readFile] = [_fs2.default.lstat, _fs2.default.mkdir, _fs2.default.readFile].map(_util.promisify);
+const { lstat, readFile } = _nodeUtils.fsAsync;
+const PROVIDES_MODULE_RX = /^\s*(?:\*|\/\/)\s*@providesModule\s*(\S+)$/m;
 
-/*:: import type { Stats } from 'fs';*/
+let FileHandler = class FileHandler {
 
-
-const PROVIDES_MODULE_RX = /^\s*(?:\*||\/\/)\s*\@providesModule\s*(\S+)$/m;
-
-class FileHandler {
-
-  constructor(filePath /*: string*/) {
-    this.filePath = filePath;
+  constructor(__filePath) {
+    this.__filePath = __filePath;
   }
 
-  async exists() /*: Promise<boolean>*/ {
-    return (0, _fsUtils.exists)(this.filePath);
+  getFilePath() {
+    return this.__filePath;
   }
 
-  async canProcess() /*: Promise<boolean>*/ {
-    const stats = await this.getStats();
+  // eslint-disable-next-line require-await
+  async exists() {
+    return (0, _fsUtils.exists)(this.__filePath);
+  }
+
+  async canProcess() {
+    const stats = await this.genStats();
     if (stats.isSymbolicLink()) {
       return false;
     }
 
     if (!stats.isFile()) {
-      throw new _moduleError2.default(`Attempting to process ${this.filePath}, but it is not a file.`);
+      throw new _nodeUtils.Err(`Attempting to process ${this.__filePath}, but it is not a file.`);
     }
 
     return true;
   }
 
-  async getStats() /*: Promise<Stats>*/ {
-    if (this.stats) {
-      return this.stats;
-    }
-
-    this.stats = await lstat(this.filePath);
-
-    return this.stats;
+  // eslint-disable-next-line require-await
+  async genStats() {
+    return lstat(this.__filePath);
   }
 
-  async getNearestNodeModulesDir(shouldCreate /*: ?boolean*/) /*: Promise<?string>*/ {
-    if (this.nodeModulesPath) {
-      return this.nodeModulesPath;
-    }
-
-    const splitPath = this.filePath.split(_path2.default.sep);
-    for (var i = splitPath.length - 1; i >= 0; i--) {
+  async genProjectDir() {
+    const splitPath = this.__filePath.split(_path2.default.sep);
+    for (let i = splitPath.length - 1; i >= 0; i--) {
       const dir = splitPath.slice(0, i);
-      const [nodeModulesExists, packageJsonExists] = await genAllNullable((0, _fsUtils.exists)(_path2.default.join(...dir.concat('node_modules'))), (0, _fsUtils.exists)(_path2.default.join(...dir.concat('package.json'))));
+      const packageJSONPath = _path2.default.resolve('/', ...dir, 'package.json');
+      const packageJsonExists = await genNull((0, _fsUtils.exists)(packageJSONPath));
 
-      if (nodeModulesExists || packageJsonExists) {
-        if (!nodeModulesExists) {
-          if (shouldCreate) {
-            try {
-              mkdir(dir.concat('node_modules').join(_path2.default.sep));
-            } catch (err) {
-              throw new _moduleError2.default(`Could not create node_modules directory in ${_path2.default.join(...dir)} because ${err}.`);
-            }
-          } else {
-            return null;
-          }
-        }
-
-        return _path2.default.join(...dir, 'node_modules');
+      if (packageJsonExists) {
+        return _path2.default.resolve('/', ...dir);
       }
     }
   }
 
-  async getOrCreateNearestNodeModulesDir() /*: Promise<?string>*/ {
-    return await this.getNearestNodeModulesDir(true);
+  async genWorkspaceDir() {
+    const { sep } = _path2.default;
+    const parentDirs = _path2.default.dirname(this.__filePath).split(sep);
+
+    while (parentDirs.length > 0) {
+      const packageJSONPath = _path2.default.resolve('/', ...parentDirs, 'package.json');
+      const packageJSONExists = await (0, _fsUtils.exists)(packageJSONPath);
+
+      if (packageJSONExists) {
+        try {
+          const json = require(packageJSONPath);
+
+          if (json.private && json.workspaces) {
+            return _path2.default.resolve('/', ...parentDirs);
+          }
+        } catch (err) {
+          // intentionally empty
+        }
+      }
+      parentDirs.pop();
+    }
   }
 
-  async getModuleName() /*: Promise<?string>*/ {
-    const fileContents = await genNullable(readFile(this.filePath));
+  async genModuleName() {
+    const fileContents = await genNull(readFile(this.__filePath));
     const matches = PROVIDES_MODULE_RX.exec(fileContents || '');
 
     return matches ? matches[1] : null;
   }
 
-  async getModuleMap() /*: Promise<ModuleMap>*/ {
-    if (!this.moduleMap) {
-      const nodeModulesDir = await this.getNearestNodeModulesDir();
-      if (!nodeModulesDir) {
-        throw new _moduleError2.default(`Could not get module map for ${this.filePath}`);
-      }
+  async genProjectModuleMap() {
+    const projectDir = await genNull(this.genProjectDir());
 
-      this.moduleMap = new _moduleMap2.default(nodeModulesDir);
+    if (!projectDir) {
+      throw new _nodeUtils.Err(`Could not get project module map for ${this.__filePath} because no project was found`);
     }
 
-    return this.moduleMap;
+    return new _moduleMap2.default(projectDir);
   }
-}
+
+  async genWorkspaceModuleMap() {
+    const workspaceDir = await genNull(this.genWorkspaceDir());
+
+    if (!workspaceDir) {
+      throw new _nodeUtils.Err(`Could not get workspace module map for ${this.__filePath} because no workspace was found`);
+    }
+
+    return new _moduleMap2.default(workspaceDir);
+  }
+
+  async genModuleMaps() {
+    const moduleMaps = await genAllNull(this.genWorkspaceModuleMap(), this.genProjectModuleMap());
+
+    return moduleMaps.filter(Boolean);
+  }
+};
 exports.default = FileHandler;
+//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbImZpbGUtaGFuZGxlci5qcyJdLCJuYW1lcyI6WyJnZW5OdWxsIiwiZ2VuQWxsTnVsbCIsImxzdGF0IiwicmVhZEZpbGUiLCJQUk9WSURFU19NT0RVTEVfUlgiLCJGaWxlSGFuZGxlciIsImNvbnN0cnVjdG9yIiwiX19maWxlUGF0aCIsImdldEZpbGVQYXRoIiwiZXhpc3RzIiwiY2FuUHJvY2VzcyIsInN0YXRzIiwiZ2VuU3RhdHMiLCJpc1N5bWJvbGljTGluayIsImlzRmlsZSIsImdlblByb2plY3REaXIiLCJzcGxpdFBhdGgiLCJzcGxpdCIsInNlcCIsImkiLCJsZW5ndGgiLCJkaXIiLCJzbGljZSIsInBhY2thZ2VKU09OUGF0aCIsInJlc29sdmUiLCJwYWNrYWdlSnNvbkV4aXN0cyIsImdlbldvcmtzcGFjZURpciIsInBhcmVudERpcnMiLCJkaXJuYW1lIiwicGFja2FnZUpTT05FeGlzdHMiLCJqc29uIiwicmVxdWlyZSIsInByaXZhdGUiLCJ3b3Jrc3BhY2VzIiwiZXJyIiwicG9wIiwiZ2VuTW9kdWxlTmFtZSIsImZpbGVDb250ZW50cyIsIm1hdGNoZXMiLCJleGVjIiwiZ2VuUHJvamVjdE1vZHVsZU1hcCIsInByb2plY3REaXIiLCJnZW5Xb3Jrc3BhY2VNb2R1bGVNYXAiLCJ3b3Jrc3BhY2VEaXIiLCJnZW5Nb2R1bGVNYXBzIiwibW9kdWxlTWFwcyIsImZpbHRlciIsIkJvb2xlYW4iXSwibWFwcGluZ3MiOiI7Ozs7Ozs7QUFFQTs7QUFDQTs7OztBQUVBOztBQUNBOzs7O0FBQ0E7Ozs7QUFJQSxNQUFNLEVBQUVBLE9BQUYsRUFBV0MsVUFBWCx3QkFBTjs7QUFDQSxNQUFNLEVBQUVDLEtBQUYsRUFBU0MsUUFBVCx1QkFBTjtBQUNBLE1BQU1DLHFCQUFxQiw2Q0FBM0I7O0lBRXFCQyxXLEdBQU4sTUFBTUEsV0FBTixDQUFrQjs7QUFHL0JDLGNBQVlDLFVBQVosRUFBdUM7QUFDckMsU0FBS0EsVUFBTCxHQUFrQkEsVUFBbEI7QUFDRDs7QUFFREMsZ0JBQTZC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QUFNM0MsUUFBUSxLQUFLMEIsZUFBTCxFQUFSLENBQTNCOztBQUVBLFFBQUksQ0FBQ2lCLFlBQUwsRUFBbUI7QUFDakIsWUFBTSxtQkFBUywwQ0FBeUMsS0FBS3BDLFVBQVcsaUNBQWxFLENBQU47QUFDRDs7QUFFRCxXQUFPLHdCQUFjb0MsWUFBZCxDQUFQO0FBQ0Q7O0FBRUQsUUFBTUMsYUFBTixHQUFpRDtBQUMvQyxVQUFNQyxhQUFzQyxNQUFNNUMsV0FDaEQsS0FBS3lDLHFCQUFMLEVBRGdELEVBRWhELEtBQUtGLG1CQUFMLEVBRmdELENBQWxEOztBQUtBLFdBQU9LLFdBQVdDLE1BQVgsQ0FBa0JDLE9BQWxCLENBQVA7QUFDRDtBQXhHOEIsQztrQkFBWjFDLFciLCJmaWxlIjoiZmlsZS1oYW5kbGVyLmpzIiwic291cmNlc0NvbnRlbnQiOlsiLy8gQGZsb3dcblxuaW1wb3J0IHsgU3RhdHMgfSBmcm9tICdmcyc7XG5pbXBvcnQgcGF0aCBmcm9tICdwYXRoJztcblxuaW1wb3J0IHsgRXJyLCBmc0FzeW5jLCBnZW5Bd2FpdCB9IGZyb20gJ25vZGUtdXRpbHMnO1xuaW1wb3J0IE1vZHVsZU1hcCBmcm9tICcuL21vZHVsZS1tYXAnO1xuaW1wb3J0IHsgZXhpc3RzIH0gZnJvbSAnLi9mcy11dGlscyc7XG5cbmltcG9ydCB0eXBlIHsgdEFic29sdXRlUGF0aCwgdE1vZHVsZU5hbWUgfSBmcm9tICdmbG93LXR5cGVzJztcblxuY29uc3QgeyBnZW5OdWxsLCBnZW5BbGxOdWxsIH0gPSBnZW5Bd2FpdDtcbmNvbnN0IHsgbHN0YXQsIHJlYWRGaWxlIH0gPSBmc0FzeW5jO1xuY29uc3QgUFJPVklERVNfTU9EVUxFX1JYID0gL15cXHMqKD86XFwqfFxcL1xcLylcXHMqQHByb3ZpZGVzTW9kdWxlXFxzKihcXFMrKSQvbTtcblxuZXhwb3J0IGRlZmF1bHQgY2xhc3MgRmlsZUhhbmRsZXIge1xuICBfX2ZpbGVQYXRoOiB0QWJzb2x1dGVQYXRoO1xuXG4gIGNvbnN0cnVjdG9yKF9fZmlsZVBhdGg6IHRBYnNvbHV0ZVBhdGgpIHtcbiAgICB0aGlzLl9fZmlsZVBhdGggPSBfX2ZpbGVQYXRoO1xuICB9XG5cbiAgZ2V0RmlsZVBhdGgoKTogdEFic29sdXRlUGF0aCB7XG4gICAgcmV0dXJuIHRoaXMuX19maWxlUGF0aDtcbiAgfVxuXG4gIC8vIGVzbGludC1kaXNhYmxlLW5leHQtbGluZSByZXF1aXJlLWF3YWl0XG4gIGFzeW5jIGV4aXN0cygpOiBQcm9taXNlPGJvb2xlYW4+IHtcbiAgICByZXR1cm4gZXhpc3RzKHRoaXMuX19maWxlUGF0aCk7XG4gIH1cblxuICBhc3luYyBjYW5Qcm9jZXNzKCk6IFByb21pc2U8Ym9vbGVhbj4ge1xuICAgIGNvbnN0IHN0YXRzID0gYXdhaXQgdGhpcy5nZW5TdGF0cygpO1xuICAgIGlmIChzdGF0cy5pc1N5bWJvbGljTGluaygpKSB7XG4gICAgICByZXR1cm4gZmFsc2U7XG4gICAgfVxuXG4gICAgaWYgKCFzdGF0cy5pc0ZpbGUoKSkge1xuICAgICAgdGhyb3cgbmV3IEVycihgQXR0ZW1wdGluZyB0byBwcm9jZXNzICR7dGhpcy5fX2ZpbGVQYXRofSwgYnV0IGl0IGlzIG5vdCBhIGZpbGUuYCk7XG4gICAgfVxuXG4gICAgcmV0dXJuIHRydWU7XG4gIH1cblxuICAvLyBlc2xpbnQtZGlzYWJsZS1uZXh0LWxpbmUgcmVxdWlyZS1hd2FpdFxuICBhc3luYyBnZW5TdGF0cygpOiBQcm9taXNlPFN0YXRzPiB7XG4gICAgcmV0dXJuIGxzdGF0KHRoaXMuX19maWxlUGF0aCk7XG4gIH1cblxuICBhc3luYyBnZW5Qcm9qZWN0RGlyKCk6IFByb21pc2U8P3RBYnNvbHV0ZVBhdGg+IHtcbiAgICBjb25zdCBzcGxpdFBhdGggPSB0aGlzLl9fZmlsZVBhdGguc3BsaXQocGF0aC5zZXApO1xuICAgIGZvciAobGV0IGkgPSBzcGxpdFBhdGgubGVuZ3RoIC0gMTsgaSA+PSAwOyBpLS0pIHtcbiAgICAgIGNvbnN0IGRpciA9IHNwbGl0UGF0aC5zbGljZSgwLCBpKTtcbiAgICAgIGNvbnN0IHBhY2thZ2VKU09OUGF0aCA9IHBhdGgucmVzb2x2ZSgnLycsIC4uLmRpciwgJ3BhY2thZ2UuanNvbicpO1xuICAgICAgY29uc3QgcGFja2FnZUpzb25FeGlzdHMgPSBhd2FpdCBnZW5OdWxsKGV4aXN0cyhwYWNrYWdlSlNPTlBhdGgpKTtcblxuICAgICAgaWYgKHBhY2thZ2VKc29uRXhpc3RzKSB7XG4gICAgICAgIHJldHVybiBwYXRoLnJlc29sdmUoJy8nLCAuLi5kaXIpO1xuICAgICAgfVxuICAgIH1cbiAgfVxuXG4gIGFzeW5jIGdlbldvcmtzcGFjZURpcigpOiBQcm9taXNlPD90QWJzb2x1dGVQYXRoPiB7XG4gICAgY29uc3QgeyBzZXAgfSA9IHBhdGg7XG4gICAgY29uc3QgcGFyZW50RGlycyA9IHBhdGguZGlybmFtZSh0aGlzLl9fZmlsZVBhdGgpLnNwbGl0KHNlcCk7XG5cbiAgICB3aGlsZSAocGFyZW50RGlycy5sZW5ndGggPiAwKSB7XG4gICAgICBjb25zdCBwYWNrYWdlSlNPTlBhdGggPSBwYXRoLnJlc29sdmUoJy8nLCAuLi5wYXJlbnREaXJzLCAncGFja2FnZS5qc29uJyk7XG4gICAgICBjb25zdCBwYWNrYWdlSlNPTkV4aXN0cyA9IGF3YWl0IGV4aXN0cyhwYWNrYWdlSlNPTlBhdGgpO1xuXG4gICAgICBpZiAocGFja2FnZUpTT05FeGlzdHMpIHtcbiAgICAgICAgdHJ5IHtcbiAgICAgICAgICBjb25zdCBqc29uID0gcmVxdWlyZShwYWNrYWdlSlNPTlBhdGgpO1xuXG4gICAgICAgICAgaWYgKGpzb24ucHJpdmF0ZSAmJiBqc29uLndvcmtzcGFjZXMpIHtcbiAgICAgICAgICAgIHJldHVybiBwYXRoLnJlc29sdmUoJy8nLCAuLi5wYXJlbnREaXJzKTtcbiAgICAgICAgICB9XG4gICAgICAgIH0gY2F0Y2ggKGVycikge1xuICAgICAgICAgIC8vIGludGVudGlvbmFsbHkgZW1wdHlcbiAgICAgICAgfVxuICAgICAgfVxuICAgICAgcGFyZW50RGlycy5wb3AoKTtcbiAgICB9XG4gIH1cblxuICBhc3luYyBnZW5Nb2R1bGVOYW1lKCk6IFByb21pc2U8P3RNb2R1bGVOYW1lPiB7XG4gICAgY29uc3QgZmlsZUNvbnRlbnRzID0gYXdhaXQgZ2VuTnVsbChyZWFkRmlsZSh0aGlzLl9fZmlsZVBhdGgpKTtcbiAgICBjb25zdCBtYXRjaGVzID0gUFJPVklERVNfTU9EVUxFX1JYLmV4ZWMoZmlsZUNvbnRlbnRzIHx8ICcnKTtcblxuICAgIHJldHVybiBtYXRjaGVzID8gbWF0Y2hlc1sxXSA6IG51bGw7XG4gIH1cblxuICBhc3luYyBnZW5Qcm9qZWN0TW9kdWxlTWFwKCk6IFByb21pc2U8TW9kdWxlTWFwPiB7XG4gICAgY29uc3QgcHJvamVjdERpciA9IGF3YWl0IGdlbk51bGwodGhpcy5nZW5Qcm9qZWN0RGlyKCkpO1xuXG4gICAgaWYgKCFwcm9qZWN0RGlyKSB7XG4gICAgICB0aHJvdyBuZXcgRXJyKGBDb3VsZCBub3QgZ2V0IHByb2plY3QgbW9kdWxlIG1hcCBmb3IgJHt0aGlzLl9fZmlsZVBhdGh9IGJlY2F1c2Ugbm8gcHJvamVjdCB3YXMgZm91bmRgKTtcbiAgICB9XG5cbiAgICByZXR1cm4gbmV3IE1vZHVsZU1hcChwcm9qZWN0RGlyKTtcbiAgfVxuXG4gIGFzeW5jIGdlbldvcmtzcGFjZU1vZHVsZU1hcCgpOiBQcm9taXNlPE1vZHVsZU1hcD4ge1xuICAgIGNvbnN0IHdvcmtzcGFjZURpciA9IGF3YWl0IGdlbk51bGwodGhpcy5nZW5Xb3Jrc3BhY2VEaXIoKSk7XG5cbiAgICBpZiAoIXdvcmtzcGFjZURpcikge1xuICAgICAgdGhyb3cgbmV3IEVycihgQ291bGQgbm90IGdldCB3b3Jrc3BhY2UgbW9kdWxlIG1hcCBmb3IgJHt0aGlzLl9fZmlsZVBhdGh9IGJlY2F1c2Ugbm8gd29ya3NwYWNlIHdhcyBmb3VuZGApO1xuICAgIH1cblxuICAgIHJldHVybiBuZXcgTW9kdWxlTWFwKHdvcmtzcGFjZURpcik7XG4gIH1cblxuICBhc3luYyBnZW5Nb2R1bGVNYXBzKCk6IFByb21pc2U8QXJyYXk8TW9kdWxlTWFwPj4ge1xuICAgIGNvbnN0IG1vZHVsZU1hcHM6IEFycmF5PE1vZHVsZU1hcCB8IG51bGw+ID0gYXdhaXQgZ2VuQWxsTnVsbChcbiAgICAgIHRoaXMuZ2VuV29ya3NwYWNlTW9kdWxlTWFwKCksXG4gICAgICB0aGlzLmdlblByb2plY3RNb2R1bGVNYXAoKSxcbiAgICApO1xuXG4gICAgcmV0dXJuIG1vZHVsZU1hcHMuZmlsdGVyKEJvb2xlYW4pO1xuICB9XG59XG4iXX0=

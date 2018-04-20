@@ -3,147 +3,89 @@
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
+exports.processFile = processFile;
+exports.deleteLinksTo = deleteLinksTo;
 
-var _path = require('path');
-
-var _path2 = _interopRequireDefault(_path);
-
-var _builtinModules = require('builtin-modules');
-
-var _builtinModules2 = _interopRequireDefault(_builtinModules);
-
-var _nodeNotifier = require('node-notifier');
-
-var _nodeNotifier2 = _interopRequireDefault(_nodeNotifier);
+require('source-map-support/register');
 
 var _fileHandler = require('./file-handler');
 
 var _fileHandler2 = _interopRequireDefault(_fileHandler);
 
-var _moduleError = require('./module-error');
+var _moduleMap = require('./module-map');
 
-var _moduleError2 = _interopRequireDefault(_moduleError);
+var _moduleMap2 = _interopRequireDefault(_moduleMap);
+
+var _fileLinker = require('./file-linker');
+
+var _fileLinker2 = _interopRequireDefault(_fileLinker);
+
+var _nodeUtils = require('node-utils');
+
+var _fsUtils = require('./fs-utils');
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-const { genNullable, genEnforce, genAllEnforce, genAllNullable } = require('node-utils').genAwait;
+const { genAllNull, genAllEnforce } = _nodeUtils.genAwait;
 
-const { access, lstat, mkdir, readdir, readFile, readlink, unlink: origUnlink } = require('node-utils').fsAsync;
-
-const { exists, linkFile: origLinkFile, readSymlinkTarget } = require('./fs-utils');
-
-
-const shouldNotify /*: boolean*/ = require('minimist')(process.argv.slice(2)).nofity;
-
-/*:: import type { Stats } from 'fs';*/
-
-exports.default = async function (filePath /*: string*/) {
+async function getProcessors(filePath) {
   const handler = new _fileHandler2.default(filePath);
+  const [projectDir, workspaceDir] = await genAllNull(handler.genProjectDir(), handler.genWorkspaceDir());
 
-  if (!(await handler.exists())) {
-    await cleanModule(handler);
-    return;
+  const workingDir = workspaceDir || projectDir;
+
+  if (!workingDir) {
+    return null;
   }
 
-  if (!(await handler.canProcess())) {
-    return;
-  }
+  const moduleMap = new _moduleMap2.default(workingDir);
+  const fileLinker = new _fileLinker2.default(workingDir);
 
-  const moduleName = await handler.getModuleName();
-  if (moduleName) {
-    if (!(await handler.getOrCreateNearestNodeModulesDir())) {
-      throw new _moduleError2.default(`Unable to find an appropriate node_modules directory for ${filePath}.`);
-    }
-
-    await addModule(handler);
-  }
-  await cleanModule(handler);
-};
-
-async function unlink(filePath /*: string*/, handler /*: FileHandler*/) {
-  const moduleMap = await handler.getModuleMap();
-  await Promise.all([moduleMap.removeLinkToTarget(filePath), origUnlink(filePath)]);
+  return { moduleMap, fileLinker, all: [moduleMap, fileLinker] };
 }
 
-async function linkFile(linkSource /*: string*/, linkTarget /*: string*/, moduleName /*: string*/, handler /*: FileHandler*/) {
-  const moduleMap = await handler.getModuleMap();
-  await Promise.all([moduleMap.add(moduleName, linkSource), origLinkFile(linkSource, linkTarget)]);
+async function processFile(filePath) {
+  const handler = new _fileHandler2.default(filePath);
+  const [moduleName, processors] = await genAllNull(handler.genModuleName(), getProcessors(filePath));
+
+  if (!processors) {
+    throw new Error(`processFile did not receive any processors`);
+  }
+
+  const buildPath = (0, _fsUtils.getBuildPath)(filePath);
+  const oldModuleName = await processors.moduleMap.existingModuleName(buildPath);
+
+  if (oldModuleName && oldModuleName !== moduleName) {
+    deleteLinksToModuleName(oldModuleName, processors);
+  }
+  if (!moduleName) return;
+
+  const processorsCanAdd = await genAllEnforce(...processors.all.map(p => p.canAdd(moduleName, buildPath)));
+  const canAddFile = processorsCanAdd.every(b => b === true);
+
+  if (!canAddFile) {
+    const reasons = [];
+    processorsCanAdd.forEach(v => typeof v === 'string' && reasons.push(v));
+
+    throw new Error(`Unable to link ${filePath} because ${reasons.join(', ')}`);
+  }
+
+  return Promise.all(processors.all.map(processor => processor.add(moduleName, buildPath))).then(() => {});
 }
 
-async function addModule(handler /*: FileHandler*/) {
-  const [nodeModulesDir, moduleName] = await genAllEnforce(handler.getNearestNodeModulesDir(), handler.getModuleName());
-  if (~_builtinModules2.default.indexOf(moduleName)) {
-    throw new _moduleError2.default(`${moduleName} is the name of a builtin node module.  Refusing to create a symlink of the same name.`);
-  }
-  const filePathSplitNormalized = _path2.default.normalize(handler.filePath).split(_path2.default.sep);
-  const moduleDirSplitNormalized = _path2.default.normalize(nodeModulesDir).split(_path2.default.sep);
-  let firstNonSharedIndex = 0;
-  while (filePathSplitNormalized[firstNonSharedIndex] === moduleDirSplitNormalized[firstNonSharedIndex]) {
-    firstNonSharedIndex++;
-  }
-  const linkSource = _path2.default.join('..', ...filePathSplitNormalized.slice(firstNonSharedIndex));
-  const linkTarget = _path2.default.join(nodeModulesDir, `${moduleName}.js`);
-  const folderTarget = _path2.default.join(nodeModulesDir, moduleName);
-  let [existingTarget, directoryExists] = await genAllNullable(readSymlinkTarget(linkTarget), exists(folderTarget));
-  if (directoryExists) {
-    throw new _moduleError2.default(`A file or directory at ${folderTarget} already exists which would cause a naming conflict with ` + `${linkTarget}.  Refusing to create the link.`);
-  }
-  if (existingTarget && !(await exists(_path2.default.resolve(nodeModulesDir, existingTarget)))) {
-    await unlink(linkTarget, handler);
-    existingTarget = null;
-  }
-  if (existingTarget) {
-    if (existingTarget !== linkSource) {
-      throw new _moduleError2.default(`link to ${linkTarget} already exists pointing to ${existingTarget}.  ` + `Cowardly refusing to replacing it with ${linkSource}.`);
-    }
-  } else {
-    await linkFile(linkSource, linkTarget, moduleName, handler);
-  }
+function deleteLinksToModuleName(moduleName, processors) {
+  processors.all.forEach(processor => processor.removeModule(moduleName));
 }
 
-function timeout(timer /*: number*/) {
-  return new Promise(resolve => setTimeout(resolve, timer));
+async function deleteLinksTo(filePath) {
+  const processors = await getProcessors(filePath);
+
+  if (!processors) return;
+  processors;
+
+  const oldModuleName = await processors.moduleMap.existingModuleName(filePath);
+  if (!oldModuleName) return;
+
+  deleteLinksToModuleName(oldModuleName, processors);
 }
-
-async function cleanModule(handler /*: FileHandler*/) {
-  const moduleDir = await handler.getNearestNodeModulesDir();
-  if (!moduleDir) {
-    return;
-  }
-  const [files, moduleName, moduleMap] = await Promise.all([genEnforce(readdir(moduleDir)), genNullable(handler.getModuleName()), handler.getModuleMap()]);
-  const normalizedFileToRemove = _path2.default.normalize(handler.filePath);
-  await Promise.all(files.map(async fileName => {
-    const filePath = _path2.default.join(moduleDir, fileName);
-    const target = await readSymlinkTarget(filePath);
-    if (!target) {
-      return;
-    }
-    if (_path2.default.normalize(_path2.default.join(moduleDir, target)) === normalizedFileToRemove) {
-      // old symlink, probably re-named the module
-      if (!moduleName || fileName !== `${moduleName}.js`) {
-        await unlink(filePath, handler);
-      }
-    }
-  }));
-}
-
-function catchError(type, err) {
-  const errPrefix = err instanceof _moduleError2.default ? '' : `uncaught ${type}: `;
-
-  if (shouldNotify) {
-    _nodeNotifier2.default.notify({
-      title: 'Global Modules Error',
-      message: err.message
-    });
-  }
-  console.error(`${errPrefix}${err}`);
-  console.log(err);
-}
-
-process.on('uncaughtException', function (err) {
-  catchError('exception', err);
-});
-
-process.on('unhandledRejection', function (reason, p) {
-  catchError('promise rejection', reason);
-});
+//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIi4uL3NyYy9wcm9jZXNzb3IuanMiXSwibmFtZXMiOlsicHJvY2Vzc0ZpbGUiLCJkZWxldGVMaW5rc1RvIiwiZ2VuQWxsTnVsbCIsImdlbkFsbEVuZm9yY2UiLCJnZXRQcm9jZXNzb3JzIiwiZmlsZVBhdGgiLCJoYW5kbGVyIiwicHJvamVjdERpciIsIndvcmtzcGFjZURpciIsImdlblByb2plY3REaXIiLCJnZW5Xb3Jrc3BhY2VEaXIiLCJ3b3JraW5nRGlyIiwibW9kdWxlTWFwIiwiZmlsZUxpbmtlciIsImFsbCIsIm1vZHVsZU5hbWUiLCJwcm9jZXNzb3JzIiwiZ2VuTW9kdWxlTmFtZSIsIkVycm9yIiwiYnVpbGRQYXRoIiwib2xkTW9kdWxlTmFtZSIsImV4aXN0aW5nTW9kdWxlTmFtZSIsImRlbGV0ZUxpbmtzVG9Nb2R1bGVOYW1lIiwicHJvY2Vzc29yc0NhbkFkZCIsIm1hcCIsInAiLCJjYW5BZGQiLCJjYW5BZGRGaWxlIiwiZXZlcnkiLCJiIiwicmVhc29ucyIsImZvckVhY2giLCJ2IiwicHVzaCIsImpvaW4iLCJQcm9taXNlIiwicHJvY2Vzc29yIiwiYWRkIiwidGhlbiIsInJlbW92ZU1vZHVsZSJdLCJtYXBwaW5ncyI6Ijs7Ozs7UUFnQ3NCQSxXLEdBQUFBLFc7UUFpQ0FDLGEsR0FBQUEsYTs7OztBQS9EdEI7Ozs7QUFDQTs7OztBQUNBOzs7O0FBRUE7O0FBQ0E7Ozs7QUFLQSxNQUFNLEVBQUVDLFVBQUYsRUFBY0MsYUFBZCx3QkFBTjs7QUFJQSxlQUFlQyxhQUFmLENBQTZCQyxRQUE3QixFQUE2RTtBQUMzRSxRQUFNQyxVQUFVLDBCQUFnQkQsUUFBaEIsQ0FBaEI7QUFDQSxRQUFNLENBQUNFLFVBQUQsRUFBYUMsWUFBYixJQUE2QixNQUFNTixXQUFXSSxRQUFRRyxhQUFSLEVBQVgsRUFBb0NILFFBQVFJLGVBQVIsRUFBcEMsQ0FBekM7O0FBRUEsUUFBTUMsYUFBYUgsZ0JBQWdCRCxVQUFuQzs7QUFFQSxNQUFJLENBQUNJLFVBQUwsRUFBaUI7QUFDZixXQUFPLElBQVA7QUFDRDs7QUFFRCxRQUFNQyxZQUFZLHdCQUFjRCxVQUFkLENBQWxCO0FBQ0EsUUFBTUUsYUFBYSx5QkFBZUYsVUFBZixDQUFuQjs7QUFFQSxTQUFPLEVBQUVDLFNBQUYsRUFBYUMsVUFBYixFQUF5QkMsS0FBSyxDQUFDRixTQUFELEVBQVlDLFVBQVosQ0FBOUIsRUFBUDtBQUNEOztBQUVNLGVBQWViLFdBQWYsQ0FBMkJLLFFBQTNCLEVBQW1FO0FBQ3hFLFFBQU1DLFVBQVUsMEJBQWdCRCxRQUFoQixDQUFoQjtBQUNBLFFBQU0sQ0FBQ1UsVUFBRCxFQUFhQyxVQUFiLElBQTJCLE1BQU1kLFdBQVdJLFFBQVFXLGFBQVIsRUFBWCxFQUFvQ2IsY0FBY0MsUUFBZCxDQUFwQyxDQUF2Qzs7QUFFQSxNQUFJLENBQUNXLFVBQUwsRUFBaUI7QUFDZixVQUFNLElBQUlFLEtBQUosQ0FBVyw0Q0FBWCxDQUFOO0FBQ0Q7O0FBRUQsUUFBTUMsWUFBWSwyQkFBYWQsUUFBYixDQUFsQjtBQUNBLFFBQU1lLGdCQUFnQixNQUFNSixXQUFXSixTQUFYLENBQXFCUyxrQkFBckIsQ0FBd0NGLFNBQXhDLENBQTVCOztBQUVBLE1BQUlDLGlCQUFpQkEsa0JBQWtCTCxVQUF2QyxFQUFtRDtBQUNqRE8sNEJBQXdCRixhQUF4QixFQUF1Q0osVUFBdkM7QUFDRDtBQUNELE1BQUksQ0FBQ0QsVUFBTCxFQUFpQjs7QUFFakIsUUFBTVEsbUJBQW1CLE1BQU1wQixjQUFjLEdBQUdhLFdBQVdGLEdBQVgsQ0FBZVUsR0FBZixDQUFtQkMsS0FBS0EsRUFBRUMsTUFBRixDQUFTWCxVQUFULEVBQXFCSSxTQUFyQixDQUF4QixDQUFqQixDQUEvQjtBQUNBLFFBQU1RLGFBQWFKLGlCQUFpQkssS0FBakIsQ0FBdUJDLEtBQUtBLE1BQU0sSUFBbEMsQ0FBbkI7O0FBRUEsTUFBSSxDQUFDRixVQUFMLEVBQWlCO0FBQ2YsVUFBTUcsVUFBVSxFQUFoQjtBQUNBUCxxQkFBaUJRLE9BQWpCLENBQXlCQyxLQUFLLE9BQU9BLENBQVAsS0FBYSxRQUFiLElBQXlCRixRQUFRRyxJQUFSLENBQWFELENBQWIsQ0FBdkQ7O0FBRUEsVUFBTSxJQUFJZCxLQUFKLENBQVcsa0JBQWlCYixRQUFTLFlBQVd5QixRQUFRSSxJQUFSLENBQWEsSUFBYixDQUFtQixFQUFuRSxDQUFOO0FBQ0Q7O0FBRUQsU0FBT0MsUUFBUXJCLEdBQVIsQ0FBWUUsV0FBV0YsR0FBWCxDQUFlVSxHQUFmLENBQW1CWSxhQUFhQSxVQUFVQyxHQUFWLENBQWN0QixVQUFkLEVBQTBCSSxTQUExQixDQUFoQyxDQUFaLEVBQW1GbUIsSUFBbkYsQ0FBd0YsTUFBTSxDQUFFLENBQWhHLENBQVA7QUFDRDs7QUFFRCxTQUFTaEIsdUJBQVQsQ0FBaUNQLFVBQWpDLEVBQTBEQyxVQUExRCxFQUFtRjtBQUNqRkEsYUFBV0YsR0FBWCxDQUFlaUIsT0FBZixDQUF1QkssYUFBYUEsVUFBVUcsWUFBVixDQUF1QnhCLFVBQXZCLENBQXBDO0FBQ0Q7O0FBRU0sZUFBZWQsYUFBZixDQUE2QkksUUFBN0IsRUFBc0Q7QUFDM0QsUUFBTVcsYUFBYSxNQUFNWixjQUFjQyxRQUFkLENBQXpCOztBQUVBLE1BQUksQ0FBQ1csVUFBTCxFQUFpQjtBQUNqQkE7O0FBRUEsUUFBTUksZ0JBQWdCLE1BQU1KLFdBQVdKLFNBQVgsQ0FBcUJTLGtCQUFyQixDQUF3Q2hCLFFBQXhDLENBQTVCO0FBQ0EsTUFBSSxDQUFDZSxhQUFMLEVBQW9COztBQUVwQkUsMEJBQXdCRixhQUF4QixFQUF1Q0osVUFBdkM7QUFDRCIsImZpbGUiOiJwcm9jZXNzb3IuanMiLCJzb3VyY2VzQ29udGVudCI6WyIvLyBAZmxvd1xuXG5pbXBvcnQgRmlsZUhhbmRsZXIgZnJvbSAnLi9maWxlLWhhbmRsZXInO1xuaW1wb3J0IE1vZHVsZU1hcCBmcm9tICcuL21vZHVsZS1tYXAnO1xuaW1wb3J0IEZpbGVMaW5rZXIgZnJvbSAnLi9maWxlLWxpbmtlcic7XG5cbmltcG9ydCB7IGdlbkF3YWl0IH0gZnJvbSAnbm9kZS11dGlscyc7XG5pbXBvcnQgeyBnZXRCdWlsZFBhdGggfSBmcm9tICcuL2ZzLXV0aWxzJztcblxuaW1wb3J0IHR5cGUgeyB0QWJzb2x1dGVQYXRoLCB0TW9kdWxlTmFtZSB9IGZyb20gJ2Zsb3ctdHlwZXMnO1xuaW1wb3J0IHR5cGUgeyBJTW9kdWxlTWFwIH0gZnJvbSAnLi9pbnRlcmZhY2VzJztcblxuY29uc3QgeyBnZW5BbGxOdWxsLCBnZW5BbGxFbmZvcmNlIH0gPSBnZW5Bd2FpdDtcblxudHlwZSB0UHJvY2Vzc29ycyA9IHsgbW9kdWxlTWFwOiBNb2R1bGVNYXAsIGZpbGVMaW5rZXI6IEZpbGVMaW5rZXIsIGFsbDogQXJyYXk8SU1vZHVsZU1hcD4gfTtcblxuYXN5bmMgZnVuY3Rpb24gZ2V0UHJvY2Vzc29ycyhmaWxlUGF0aDogdEFic29sdXRlUGF0aCk6IFByb21pc2U8P3RQcm9jZXNzb3JzPiB7XG4gIGNvbnN0IGhhbmRsZXIgPSBuZXcgRmlsZUhhbmRsZXIoZmlsZVBhdGgpO1xuICBjb25zdCBbcHJvamVjdERpciwgd29ya3NwYWNlRGlyXSA9IGF3YWl0IGdlbkFsbE51bGwoaGFuZGxlci5nZW5Qcm9qZWN0RGlyKCksIGhhbmRsZXIuZ2VuV29ya3NwYWNlRGlyKCkpO1xuXG4gIGNvbnN0IHdvcmtpbmdEaXIgPSB3b3Jrc3BhY2VEaXIgfHwgcHJvamVjdERpcjtcblxuICBpZiAoIXdvcmtpbmdEaXIpIHtcbiAgICByZXR1cm4gbnVsbDtcbiAgfVxuXG4gIGNvbnN0IG1vZHVsZU1hcCA9IG5ldyBNb2R1bGVNYXAod29ya2luZ0Rpcik7XG4gIGNvbnN0IGZpbGVMaW5rZXIgPSBuZXcgRmlsZUxpbmtlcih3b3JraW5nRGlyKTtcblxuICByZXR1cm4geyBtb2R1bGVNYXAsIGZpbGVMaW5rZXIsIGFsbDogW21vZHVsZU1hcCwgZmlsZUxpbmtlcl0gfTtcbn1cblxuZXhwb3J0IGFzeW5jIGZ1bmN0aW9uIHByb2Nlc3NGaWxlKGZpbGVQYXRoOiB0QWJzb2x1dGVQYXRoKTogUHJvbWlzZTx2b2lkPiB7XG4gIGNvbnN0IGhhbmRsZXIgPSBuZXcgRmlsZUhhbmRsZXIoZmlsZVBhdGgpO1xuICBjb25zdCBbbW9kdWxlTmFtZSwgcHJvY2Vzc29yc10gPSBhd2FpdCBnZW5BbGxOdWxsKGhhbmRsZXIuZ2VuTW9kdWxlTmFtZSgpLCBnZXRQcm9jZXNzb3JzKGZpbGVQYXRoKSk7XG5cbiAgaWYgKCFwcm9jZXNzb3JzKSB7XG4gICAgdGhyb3cgbmV3IEVycm9yKGBwcm9jZXNzRmlsZSBkaWQgbm90IHJlY2VpdmUgYW55IHByb2Nlc3NvcnNgKTtcbiAgfVxuXG4gIGNvbnN0IGJ1aWxkUGF0aCA9IGdldEJ1aWxkUGF0aChmaWxlUGF0aCk7XG4gIGNvbnN0IG9sZE1vZHVsZU5hbWUgPSBhd2FpdCBwcm9jZXNzb3JzLm1vZHVsZU1hcC5leGlzdGluZ01vZHVsZU5hbWUoYnVpbGRQYXRoKTtcblxuICBpZiAob2xkTW9kdWxlTmFtZSAmJiBvbGRNb2R1bGVOYW1lICE9PSBtb2R1bGVOYW1lKSB7XG4gICAgZGVsZXRlTGlua3NUb01vZHVsZU5hbWUob2xkTW9kdWxlTmFtZSwgcHJvY2Vzc29ycyk7XG4gIH1cbiAgaWYgKCFtb2R1bGVOYW1lKSByZXR1cm47XG5cbiAgY29uc3QgcHJvY2Vzc29yc0NhbkFkZCA9IGF3YWl0IGdlbkFsbEVuZm9yY2UoLi4ucHJvY2Vzc29ycy5hbGwubWFwKHAgPT4gcC5jYW5BZGQobW9kdWxlTmFtZSwgYnVpbGRQYXRoKSkpO1xuICBjb25zdCBjYW5BZGRGaWxlID0gcHJvY2Vzc29yc0NhbkFkZC5ldmVyeShiID0+IGIgPT09IHRydWUpO1xuXG4gIGlmICghY2FuQWRkRmlsZSkge1xuICAgIGNvbnN0IHJlYXNvbnMgPSBbXTtcbiAgICBwcm9jZXNzb3JzQ2FuQWRkLmZvckVhY2godiA9PiB0eXBlb2YgdiA9PT0gJ3N0cmluZycgJiYgcmVhc29ucy5wdXNoKHYpKTtcblxuICAgIHRocm93IG5ldyBFcnJvcihgVW5hYmxlIHRvIGxpbmsgJHtmaWxlUGF0aH0gYmVjYXVzZSAke3JlYXNvbnMuam9pbignLCAnKX1gKTtcbiAgfVxuXG4gIHJldHVybiBQcm9taXNlLmFsbChwcm9jZXNzb3JzLmFsbC5tYXAocHJvY2Vzc29yID0+IHByb2Nlc3Nvci5hZGQobW9kdWxlTmFtZSwgYnVpbGRQYXRoKSkpLnRoZW4oKCkgPT4ge30pO1xufVxuXG5mdW5jdGlvbiBkZWxldGVMaW5rc1RvTW9kdWxlTmFtZShtb2R1bGVOYW1lOiB0TW9kdWxlTmFtZSwgcHJvY2Vzc29yczogdFByb2Nlc3NvcnMpIHtcbiAgcHJvY2Vzc29ycy5hbGwuZm9yRWFjaChwcm9jZXNzb3IgPT4gcHJvY2Vzc29yLnJlbW92ZU1vZHVsZShtb2R1bGVOYW1lKSk7XG59XG5cbmV4cG9ydCBhc3luYyBmdW5jdGlvbiBkZWxldGVMaW5rc1RvKGZpbGVQYXRoOiB0QWJzb2x1dGVQYXRoKSB7XG4gIGNvbnN0IHByb2Nlc3NvcnMgPSBhd2FpdCBnZXRQcm9jZXNzb3JzKGZpbGVQYXRoKTtcblxuICBpZiAoIXByb2Nlc3NvcnMpIHJldHVybjtcbiAgcHJvY2Vzc29ycztcblxuICBjb25zdCBvbGRNb2R1bGVOYW1lID0gYXdhaXQgcHJvY2Vzc29ycy5tb2R1bGVNYXAuZXhpc3RpbmdNb2R1bGVOYW1lKGZpbGVQYXRoKTtcbiAgaWYgKCFvbGRNb2R1bGVOYW1lKSByZXR1cm47XG5cbiAgZGVsZXRlTGlua3NUb01vZHVsZU5hbWUob2xkTW9kdWxlTmFtZSwgcHJvY2Vzc29ycyk7XG59XG4iXX0=

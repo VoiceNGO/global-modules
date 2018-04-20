@@ -2,12 +2,11 @@
   "name": "global-modules",
   "version": "0.0.1",
   "description": "Exposes individual modules at the global level to prevent deep require paths",
-  "main": "src/index.js",
+  "main": "build/index.js",
   "author": "Mark Kahn <mark@voice.ngo>",
   "dependencies": {
     "builtin-modules": "^1.1.1",
     "fb-watchman": "^2.0.0",
-    "gen-await": "^0.0.1",
     "minimist": "^1.2.0",
     "node-notifier": "^5.1.2",
     "node-utils": "*"
@@ -17,14 +16,12 @@
     "babel-preset-flow": "^6.23.0",
     "babel-preset-import-export": "^1.0.2",
     "babel-register": "^6.24.1",
-    "mocha": "^3.4.2",
-    "should": "^11.2.1"
+    "mocha": "4.x.x",
+    "should": "13.x.x",
+    "flow-types": "*"
   },
   "scripts": {
     "build": "babel src -d lib",
     "test": "mocha --require babel-register"
-  },
-  "babel": {
-    "presets": ["flow", "import-export"]
   }
 }
