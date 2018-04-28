@@ -12,7 +12,7 @@ const SRC_DIRECTORY = 'src';
 const BUILD_DIRECTORY = 'build';
 
 export async function readSymlinkTarget(filePath: tAbsolutePath): Promise<tAbsolutePath | null> {
-  if (!await exists(filePath)) {
+  if (!(await exists(filePath))) {
     return null;
   }
 
@@ -21,7 +21,10 @@ export async function readSymlinkTarget(filePath: tAbsolutePath): Promise<tAbsol
     return null;
   }
 
-  return readlink(filePath);
+  const linkTarget = await readlink(filePath);
+  const resolvedLink = path.resolve(path.dirname(filePath), linkTarget);
+
+  return resolvedLink;
 }
 
 export async function linkFile(realPath: tAbsolutePath, linkPath: tAbsolutePath) {

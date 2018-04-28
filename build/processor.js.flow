@@ -4,12 +4,13 @@ import FileHandler from './file-handler';
 import ModuleMap from './module-map';
 import FileLinker from './file-linker';
 
-import { genAwait } from 'node-utils';
+import { genAwait, arrayAsync } from 'node-utils';
 import { getBuildPath } from './fs-utils';
 
 import type { tAbsolutePath, tModuleName } from 'flow-types';
 import type { IModuleMap } from './interfaces';
 
+const { genForEachNull } = arrayAsync;
 const { genAllNull, genAllEnforce } = genAwait;
 
 type tProcessors = { moduleMap: ModuleMap, fileLinker: FileLinker, all: Array<IModuleMap> };
@@ -56,7 +57,7 @@ export async function processFile(filePath: tAbsolutePath): Promise<void> {
     throw new Error(`Unable to link ${filePath} because ${reasons.join(', ')}`);
   }
 
-  return Promise.all(processors.all.map(processor => processor.add(moduleName, buildPath))).then(() => {});
+  return genForEachNull(processors.all, processor => processor.add(moduleName, buildPath));
 }
 
 function deleteLinksToModuleName(moduleName: tModuleName, processors: tProcessors) {

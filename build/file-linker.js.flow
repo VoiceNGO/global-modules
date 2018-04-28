@@ -8,7 +8,7 @@ import { exists, linkFile, readSymlinkTarget } from './fs-utils';
 import type { IModuleMap } from './interfaces';
 import type { tAbsolutePath, tModuleName } from 'flow-types';
 
-const { every: everyAsync } = arrayAsync;
+const { genEveryNull } = arrayAsync;
 const { lstat, mkdirp, unlink, dirIsEmpty, rmdir } = fsAsync;
 const { gen, genAllNull } = genAwait;
 
@@ -48,7 +48,7 @@ export default class FileLinker implements IModuleMap {
       const moduleParts = moduleName.split(MODULE_SEPERATOR);
       const folderParts = moduleParts.slice(0, -1);
 
-      const allPartsAreFolders = await everyAsync(
+      const allPartsAreFolders = await genEveryNull(
         folderParts,
         async (current, index) => {
           const folders = folderParts.slice(0, index + 1);
@@ -77,7 +77,8 @@ export default class FileLinker implements IModuleMap {
   }
 
   async add(moduleName: tModuleName, modulePath: tAbsolutePath) {
-    const linkPath = path.resolve(this.nodeModulesPath, moduleName);
+    const linkPath = path.resolve(this.nodeModulesPath, `${moduleName}.js`);
+    let linkRoot = this.nodeModulesPath;
     const [canAdd, existingTarget] = await genAllNull(this.canAdd(moduleName, modulePath), readSymlinkTarget(linkPath));
 
     if (existingTarget && existingTarget === modulePath) return;
@@ -92,9 +93,13 @@ export default class FileLinker implements IModuleMap {
       const folder = path.resolve(this.nodeModulesPath, ...folderParts);
 
       await mkdirp(folder);
+
+      linkRoot = folder;
     }
 
-    await linkFile(modulePath, linkPath);
+    const relModulePath = path.relative(linkRoot, modulePath);
+
+    await linkFile(relModulePath, linkPath);
   }
 
   async removeModule(moduleName: tModuleName) {
@@ -104,7 +109,7 @@ export default class FileLinker implements IModuleMap {
       throw new Error(`can not unlink module ${moduleName}`);
     }
 
-    const linkPath = path.resolve(this.nodeModulesPath, moduleName);
+    const linkPath = path.resolve(this.nodeModulesPath, `${moduleName}.js`);
     const fileExists = await exists(linkPath);
 
     if (fileExists) {

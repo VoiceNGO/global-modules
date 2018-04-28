@@ -145,4 +145,10 @@ export default class ModuleMap implements IModuleMap {
       }
     }
   }
+
+  async genModules(): Promise<{ [tModuleName]: tRelativePath }> {
+    await this.load();
+
+    return this.moduleMap;
+  }
 }
